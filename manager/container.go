@@ -243,7 +243,19 @@ func (cd *containerData) getPsOutput(inHostNamespace bool, format string) ([]byt
 		command = "/usr/sbin/chroot"
 		args = append(args, "/rootfs", "ps")
 	}
-	args = append(args, "-e", "-o", format)
+	//args = append(args, "-e", "-o", format)
+
+	//passed format satisfy to the format below
+	//"user,pid,ppid,stime,pcpu,pmem,vsz,rss,time,stat,comm,psr,{PPID},cgroup"
+	//but made with | as a delimiter because command can contains spaces,
+	//also ppid printed twice times for print delimiters between columns.
+	args = append(
+		args,
+		"-e", "-o", "%u|%p|%P|", "-o", "stime", "-o", "|%C|",
+		"-o", "pmem", "-o", "|%z|", "-o", "rss", "-o", "|%x|",
+		"-o", "stat", "-o", "|%c|", "-o", "psr", "-o", "|%P|",
+		"-o", "cgroup",
+	)
 	out, err := exec.Command(command, args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute %q command: %v", command, err)
@@ -289,62 +301,121 @@ func (cd *containerData) GetProcessList(cadvisorContainer string, inHostNamespac
 	if !inHostNamespace {
 		rootfs = "/rootfs"
 	}
-	format := "user,pid,ppid,stime,pcpu,pmem,rss,vsz,stat,time,comm,psr,cgroup"
-	out, err := cd.getPsOutput(inHostNamespace, format)
+	//This format is useless now
+	//format := "user,pid,ppid,stime,pcpu,pmem,rss,vsz,stat,time,comm,psr,cgroup"
+	//out, err := cd.getPsOutput(inHostNamespace, format)
+	out, err := cd.getPsOutput(inHostNamespace, "")
 	if err != nil {
 		return nil, err
 	}
-	expectedFields := 13
+	//expectedFields := 13
+	//now we expected 14 fileds
+	expectedFields := 14
+
+	trimFunc := func(value string) string {
+		return strings.Trim(
+			value, "\"' ",
+		)
+	}
+
 	processes := []v2.ProcessInfo{}
 	lines := strings.Split(string(out), "\n")
 	for _, line := range lines[1:] {
 		if len(line) == 0 {
 			continue
 		}
-		fields := strings.Fields(line)
+		//fields := strings.Fields(line)
+		fields := strings.Split(line, "|")
 		if len(fields) < expectedFields {
-			return nil, fmt.Errorf("expected at least %d fields, found %d: output: %q", expectedFields, len(fields), line)
+			return nil, fmt.Errorf(
+				"expected at least %d fields, found %d: output: %q",
+				expectedFields, len(fields), line,
+			)
 		}
-		pid, err := strconv.Atoi(fields[1])
+
+		pid, err := strconv.Atoi(trimFunc(fields[1]))
 		if err != nil {
-			return nil, fmt.Errorf("invalid pid %q: %v", fields[1], err)
+			return nil, fmt.Errorf(
+				"invalid pid %q: %v", trimFunc(fields[1]), err,
+			)
 		}
-		ppid, err := strconv.Atoi(fields[2])
+
+		ppid, err := strconv.Atoi(trimFunc(fields[2]))
 		if err != nil {
-			return nil, fmt.Errorf("invalid ppid %q: %v", fields[2], err)
+			return nil, fmt.Errorf(
+				"invalid ppid %q: %v", trimFunc(fields[2]), err,
+			)
 		}
-		percentCPU, err := strconv.ParseFloat(fields[4], 32)
+
+		percentCPU, err := strconv.ParseFloat(trimFunc(fields[4]), 32)
 		if err != nil {
-			return nil, fmt.Errorf("invalid cpu percent %q: %v", fields[4], err)
+			return nil, fmt.Errorf(
+				"invalid cpu percent %q: %v", fields[4], err,
+			)
 		}
-		percentMem, err := strconv.ParseFloat(fields[5], 32)
+
+		percentMem, err := strconv.ParseFloat(trimFunc(fields[5]), 32)
 		if err != nil {
-			return nil, fmt.Errorf("invalid memory percent %q: %v", fields[5], err)
+			return nil, fmt.Errorf(
+				"invalid memory percent %q: %v", trimFunc(fields[5]), err)
 		}
-		rss, err := strconv.ParseUint(fields[6], 0, 64)
+
+		//rss, err := strconv.ParseUint(fields[6], 0, 64)
+		//if err != nil {
+		//	return nil, fmt.Errorf("invalid rss %q: %v", fields[6], err)
+		//}
+		//// convert to bytes
+		//rss *= 1024
+		rss, err := strconv.ParseUint(trimFunc(fields[7]), 0, 64)
 		if err != nil {
-			return nil, fmt.Errorf("invalid rss %q: %v", fields[6], err)
+			return nil, fmt.Errorf(
+				"invalid rss %q: %v", trimFunc(fields[7]), err,
+			)
 		}
 		// convert to bytes
 		rss *= 1024
-		vs, err := strconv.ParseUint(fields[7], 0, 64)
+
+		//vs, err := strconv.ParseUint(fields[7], 0, 64)
+		//if err != nil {
+		//	return nil, fmt.Errorf("invalid virtual size %q: %v", fields[7], err)
+		//}
+		//// convert to bytes
+		//vs *= 1024
+
+		vs, err := strconv.ParseUint(trimFunc(fields[6]), 0, 64)
 		if err != nil {
-			return nil, fmt.Errorf("invalid virtual size %q: %v", fields[7], err)
+			return nil, fmt.Errorf(
+				"invalid virtual size %q: %v", trimFunc(fields[6]), err,
+			)
 		}
 		// convert to bytes
 		vs *= 1024
-		psr, err := strconv.Atoi(fields[11])
+
+		psr, err := strconv.Atoi(trimFunc(fields[11]))
 		if err != nil {
-			return nil, fmt.Errorf("invalid pid %q: %v", fields[1], err)
+			return nil, fmt.Errorf(
+				"invalid pid %q: %v", trimFunc(fields[1]), err,
+			)
 		}
 
-		cgroup, err := cd.getCgroupPath(fields[12])
+		//cgroup, err := cd.getCgroupPath(fields[12])
+		//if err != nil {
+		//	return nil, fmt.Errorf("could not parse cgroup path from %q: %v", fields[11], err)
+		//}
+
+		cgroup, err := cd.getCgroupPath(trimFunc(fields[13]))
 		if err != nil {
-			return nil, fmt.Errorf("could not parse cgroup path from %q: %v", fields[11], err)
+			return nil, fmt.Errorf(
+				"could not parse cgroup path from %q: %v",
+				trimFunc(fields[13]), err,
+			)
 		}
+
 		// Remove the ps command we just ran from cadvisor container.
 		// Not necessary, but makes the cadvisor page look cleaner.
-		if !inHostNamespace && cadvisorContainer == cgroup && fields[10] == "ps" {
+		if !inHostNamespace && cadvisorContainer == cgroup &&
+			trimFunc(fields[10]) == "ps" {
+
 			continue
 		}
 		var cgroupPath string
@@ -363,20 +434,22 @@ func (cd *containerData) GetProcessList(cadvisorContainer string, inHostNamespac
 
 		if isRoot || cd.info.Name == cgroup {
 			processes = append(processes, v2.ProcessInfo{
-				User:          fields[0],
+				User:          trimFunc(fields[0]),
 				Pid:           pid,
 				Ppid:          ppid,
-				StartTime:     fields[3],
+				StartTime:     trimFunc(fields[3]),
 				PercentCpu:    float32(percentCPU),
 				PercentMemory: float32(percentMem),
 				RSS:           rss,
 				VirtualSize:   vs,
-				Status:        fields[8],
-				RunningTime:   fields[9],
-				Cmd:           fields[10],
-				CgroupPath:    cgroupPath,
-				FdCount:       fdCount,
-				Psr:           psr,
+				//Status:        fields[8],
+				Status: trimFunc(fields[9]),
+				//RunningTime: fields[9],
+				RunningTime: trimFunc(fields[8]),
+				Cmd:         trimFunc(fields[10]),
+				CgroupPath:  cgroupPath,
+				FdCount:     fdCount,
+				Psr:         psr,
 			})
 		}
 	}
